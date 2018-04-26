@@ -1,0 +1,226 @@
+﻿<File version="3.1">
+  <Code><![CDATA[<#	
+	.NOTES
+	===========================================================================
+	 Created with: 	SAPIEN Technologies, Inc., PowerShell Studio 2018 v5.5.150
+	 Created on:   	4/26/2018 9:52 AM
+	 Created by:   	Christopher.LaDue
+	 Organization: 	Cascade Technology Alliance
+	 Filename:     	
+	===========================================================================
+	.DESCRIPTION
+		
+#>
+
+function Main {
+<#
+    .SYNOPSIS
+        The Main function starts the project application.
+    
+    .NOTES
+        To get the console output in the Packager (Forms Engine) use:
+		$ConsoleOutput (Type: System.Collections.ArrayList)
+#>
+	#--------------------------------------------
+	# Declare Global Variables and Functions here
+	#--------------------------------------------
+	#--------------------------------------------
+	#               Variables
+	#--------------------------------------------
+	
+	#Bandwidth object.  Initializing for use later
+	$global:oBandwidth = New-Object -TypeName System.Management.Automation.PSObject #initialize PSObject for use later
+	Add-Member -InputObject $oBandwidth -MemberType NoteProperty -Name Lat -Value ("init")
+	Add-Member -InputObject $oBandwidth -MemberType NoteProperty -Name Lon -Value ("init")
+	Add-Member -InputObject $oBandwidth -MemberType NoteProperty -Name ISP -Value ("init")
+	Add-Member -InputObject $oBandwidth -MemberType NoteProperty -Name Server -Value ("init")
+	Add-Member -InputObject $oBandwidth -MemberType NoteProperty -Name Speed -Value ("init")
+	#--------------------------------------------------------------------------
+	
+	#Address of the toolbax server we are testing against.  Change this to whatever NWRESD address is to customize for them
+	$global:sAddress = "toolbox.wesd.org"
+	#--------------------------------------------------------------------------
+	
+	#Current Date/Time
+	$global:sDate = Get-Date -Format M-d-yyyyTHH-mm-ss
+	#--------------------------------------------------------------------------
+	
+	#Path to the logfile.  Could probably remove this file after we confirm it sends. TODO FIXME
+	$global:sLogFile = "$env:USERPROFILE\Log-$global:sDate.txt"
+	#--------------------------------------------------------------------------
+	
+	#Filler line, cuz I like neatly defined sections in my logs....
+	$sLine = "----------------------------------------------------------------------"
+	#--------------------------------------------------------------------------
+	
+	#SMTP server information
+	$global:oSMTP = New-Object -TypeName System.Management.Automation.PSObject #initialize PSObject for use later
+	Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name Server -Value ("mailhost.wesd.org")
+	Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name TO -Value ("toolbox.stats@wesd.org")
+	Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name FROM -Value ("toolbox.stats@wesd.org")
+	Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name Subject -Value ("DataWarehouse Client Connectivity")
+	Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name Body -Value ("Stats collected while attempting to communicate to toolbox.wesd.org")
+	#--------------------------------------------------------------------------
+	
+	#--------------------------------------------
+	#               Functions
+	#--------------------------------------------
+	
+	function pingToolbox()	{ #TODO clean this crap up!
+		Write-Output $sLine >> $global:sLogFile
+		PING $global:sAddress >> $global:sLogFile
+		Write-Output $sLine >> $global:sLogFile
+	}
+	#--------------------------------------------------------------------------
+	
+	function traceToolbox()	{ #TODO clean this crap up!
+		Write-Output $sLine >> $global:sLogFile
+		TRACERT $global:sAddress >> $global:sLogFile
+		Write-Output $sLine >> $global:sLogfile
+	}
+	#--------------------------------------------------------------------------
+	
+	Function downloadSpeed($strUploadUrl)	{
+		$topServerUrlSpilt = $strUploadUrl -split 'upload'
+		$url = $topServerUrlSpilt[0] + 'random2000x2000.jpg'
+		$col = new-object System.Collections.Specialized.NameValueCollection
+		$wc = new-object system.net.WebClient
+		$wc.QueryString = $col
+		$downloadElaspedTime = (measure-command { $webpage1 = $wc.DownloadData($url) }).totalmilliseconds
+		$string = [System.Text.Encoding]::ASCII.GetString($webpage1)
+		$downSize = ($webpage1.length + $webpage2.length) / 1Mb
+		$downloadSize = [Math]::Round($downSize, 2)
+		$downloadTimeSec = $downloadElaspedTime * 0.001
+		$downSpeed = ($downloadSize / $downloadTimeSec) * 8
+		$downloadSpeed = [Math]::Round($downSpeed, 2)
+		return $downloadSpeed
+	}
+	#--------------------------------------------------------------------------
+	
+	Function bandwidthTest() {		
+		<# 
+		Using this method to make the submission to speedtest. Its the only way i could figure out how to interact with the page since there is no API. 
+		More information for later here: https://support.microsoft.com/en-us/kb/290591 
+		#>
+		$oXmlHttp = New-Object -ComObject MSXML2.ServerXMLHTTP
+		$oXmlHttp.Open("GET", "http://www.speedtest.net/speedtest-config.php", $False)
+		$oXmlHttp.Send()
+		
+		#Retrieving the content of the response.
+		[xml]$xContent = $oXmlHttp.responseText
+		$global:oBandwidth.ISP = $xContent.settings.client.isp
+		$global:oBandwidth.Lat = $xContent.settings.client.lat
+		$global:oBandwidth.Lon = $xContent.settings.client.lon
+		
+		#Making another request. This time to get the server list from the site.
+		$oXmlHttp1 = New-Object -ComObject MSXML2.ServerXMLHTTP
+		$oXmlHttp1.Open("GET", "http://www.speedtest.net/speedtest-servers.php", $False)
+		$oXmlHttp1.Send()
+		
+		#Retrieving the content of the response.
+		[xml]$xServerList = $oXmlHttp1.responseText
+		$aServer = $xServerList.settings.servers.server
+		
+		#Below we calculate servers relative closeness to you by doing some math against latitude and longitude. 
+		foreach ($oValue in $aServer) {
+			$R = 6371;
+			[float]$dlat = ([float]$global:oBandwidth.Lat - [float]$oValue.lat) * 3.14 / 180;
+			[float]$dlon = ([float]$global:oBandwidth.Lon - [float]$oValue.lon) * 3.14 / 180;
+			[float]$a = [math]::Sin([float]$dLat/2) * [math]::Sin([float]$dLat/2) + [math]::Cos([float]$global:oBandwidth.Lat * 3.14 / 180) * [math]::Cos([float]$oValue.lat * 3.14 / 180) * [math]::Sin([float]$dLon/2) * [math]::Sin([float]$dLon/2);
+			[float]$c = 2 * [math]::Atan2([math]::Sqrt([float]$a), [math]::Sqrt(1 - [float]$a));
+			[float]$d = [float]$R * [float]$c;
+			
+			$oServerInformation += @([pscustomobject]@{ Distance = $d; Country = $oValue.country; Sponsor = $oValue.sponsor; Url = $oValue.url })
+			$global:oBandwidth.Server = $oValue.url
+		}
+		
+		$oServerInformation = $oServerInformation | Sort-Object -Property distance
+		
+		#Runs the functions 4 times and takes the highest result.
+		$DLResults1 = downloadSpeed($oServerInformation[0].url)
+		$SpeedResults += @([pscustomobject]@{ Speed = $DLResults1; })
+		
+		$DLResults2 = downloadSpeed($oServerInformation[1].url)
+		$SpeedResults += @([pscustomobject]@{ Speed = $DLResults2; })
+		
+		$DLResults3 = downloadSpeed($oServerInformation[2].url)
+		$SpeedResults += @([pscustomobject]@{ Speed = $DLResults3; })
+		
+		$DLResults4 = downloadSpeed($oServerInformation[3].url)
+		$SpeedResults += @([pscustomobject]@{ Speed = $DLResults4; })
+		
+		$UnsortedResults = $SpeedResults | Sort-Object -Property speed
+		$global:oBandwidth.Speed = $UnsortedResults[3].speed
+	}
+	function sendMail()	{
+		$SMTPMessage = New-Object System.Net.Mail.MailMessage($oSMTP.FROM, $oSMTP.TO, $oSMTP.Subject, $oSMTP.Body)
+		$attachment = New-Object System.Net.Mail.Attachment($global:sLogFile)
+		$SMTPMessage.Attachments.Add($attachment)
+		
+		$SMTPClient = New-Object Net.Mail.SmtpClient($oSMTP.Server, 25)
+		$SMTPClient.EnableSsl = $true
+		$SMTPClient.Credentials = New-Object System.Net.NetworkCredential("toolbox.stats@wesd.org", "moon-athens-DUSK-succeed");
+		$SMTPClient.Send($SMTPMessage)
+	}
+	# ----------------------------------------------------
+	# END OF GLOBAL DECLARATIONS
+	# ----------------------------------------------------
+	
+	#Write initial output to log file
+	Write-Output $sLine >> $global:sLogFile
+	Write-Output $global:sDate >> $global:sLogFile
+	Write-Output "All information has been written to:" $global:sLogFile
+	#record ping data to logfile
+	pingToolbox
+	
+	#record tracert data to logfile
+	traceToolbox
+	
+	#Test port 443
+	Write-Output $sLine >> $global:sLogFile
+	Write-Output "Testing connectivity on Port 443:" >> $global:sLogFile
+	Test-NetConnection -Port 443 -ComputerName toolbox.wesd.org >> $global:sLogFile
+	
+	#Test port 80
+	Write-Output $sLine >> $global:sLogFile
+	Write-Output "Testing connectivity on Port 80:" >> $global:sLogFile
+	Test-NetConnection -CommonTCPPort HTTP -ComputerName toolbox.wesd.org >> $global:sLogFile
+	
+	#Test speed to internet(speedtest.net)
+	bandwidthTest
+	Write-Output "Testing internet connection speed:" >> $global:sLogFile
+	Write-Output $sLine >> $global:sLogFile
+	$sISP = $oBandwidth.ISP
+	Write-Output "Current ISP = $sISP" >> $global:sLogFile
+	$sLat = $oBandwidth.Lat
+	$sLon = $oBandwidth.Lon
+	Write-Output "Current Location(of ISP connection): Lat: $sLat Long: $sLon" >> $global:sLogFile
+	$sServer = $oBandwidth.Server
+	Write-Output "Testing connection to: $sServer" >> $global:sLogFile
+	$sSpeed = $oBandwidth.Speed
+	Write-Output "Connection speed: $sSpeed" >> $global:sLogFile
+	
+	#Compose and send Email
+	sendMail
+	
+	#Clean up log file #TODO FIXME
+	#Nothing here yet.. :(
+	
+	#Finished
+	$script:ExitCode = 0 #Set the exit code for the Packager
+}
+
+
+
+]]></Code>
+  <Assemblies>
+    <Assembly>System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</Assembly>
+    <Assembly>System.Management.Automation, Version=1.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35</Assembly>
+    <Assembly>System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</Assembly>
+    <Assembly>System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</Assembly>
+    <Assembly>mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</Assembly>
+    <Assembly>System.Data, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</Assembly>
+    <Assembly>System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</Assembly>
+    <Assembly>System.DirectoryServices, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</Assembly>
+  </Assemblies>
+</File>
