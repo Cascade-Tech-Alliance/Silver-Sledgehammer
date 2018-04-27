@@ -5,6 +5,6 @@
   <Folders />
   <Files>
     <File Build="0">Startup.pss</File>
-    <File Build="2">.gitignore</File>
+    <File Build="1">.gitignore</File>
   </Files>
 </Project>
