@@ -52,117 +52,139 @@ Add-Member -InputObject $oSMTP -MemberType NoteProperty -Name Body -Value ("Stat
 #--------------------------------------------
 #               Functions
 #--------------------------------------------
-function pingToolbox()
-{
+function Get-ToolboxPing() {
 	#Init temp opbject so we can sort measure and store
 	$oPINGResults = New-Object System.Collections.Generic.List[System.Object]
 	#Likes me my filler lines.....
-	$oSMTP.Body += $sLongLine
+	$sResults = $sLongLine
 	#Run 5 pings, take lowest, highest and mean
 	For ($i = 0; $i -lt 5; $i++) { $oPINGResults.Add((Get-WmiObject Win32_PingStatus -Filter "Address='$global:sAddress'")) }
 	#Measure the ResponseTime field of the list, pull out min, max and avg values
 	$oPingMeasured = $oPINGResults.ResponseTime | Measure-Object -Maximum -Minimum -Average
 	#Massage the output slightly and add to eMail body field
-	$oSMTP.Body += $oPINGResults | Format-Table -autosize | Out-String
+	$sResults += $oPINGResults |Format-Table -AutoSize | Out-String	
 	#Likes me my filler lines.....
-	$oSMTP.Body += $sLongLine + "`n"
+	$sResults += $sLongLine + "`n"
 	#Pull the 3 values we want out of the measured object(did weird things trying to call the properties)
 	$sMin = $oPingMeasured.Minimum
 	$sMax = $oPingMeasured.Maximum
 	$sAvg = $oPingMeasured.Average
 	#Add the min, max and avg values to the bottom of the ping results
-	$oSMTP.Body += "Minimum: $sMin ms   Maximum: $sMax ms  Average: $sAvg ms" + "`n`n`n"
+	$sResults += "Minimum: $sMin ms   Maximum: $sMax ms  Average: $sAvg ms" + "`n`n`n"
+	return $sResults
 }
+
 #--------------------------------------------------------------------------
-function traceToolbox() {
+function Get-ToolboxTraceroute() {
 	#Init temp opbject(List)
 	$oTraceResults = New-Object System.Collections.Generic.List[System.Object]
 	#Run the traceroute and store in our temp object
 	$oTraceResults.Add((TRACERT $global:sAddress)) #NEEDS TO BE BETTER THAN THIS! Unfortunately -DiagnoseRouting flag for Test-NetConnection not supported fully yet
-	#Output as string and append to our email body
-	$oSMTP.Body += $oTraceResults | Out-String
-	$oSMTP.Body += "`n`n`n"
+	#Output as string 
+	$sResults = $oTraceResults | Out-String
+	$sResults += "`n`n"
+	return $sResults
 }
+
 #--------------------------------------------------------------------------
-Function downloadSpeed($strUploadUrl) {
-	$topServerUrlSpilt = $strUploadUrl -split 'upload'
-	$url = $topServerUrlSpilt[0] + 'random2000x2000.jpg'
-	$col = new-object System.Collections.Specialized.NameValueCollection
-	$wc = new-object system.net.WebClient
-	$wc.QueryString = $col
-	$downloadElaspedTime = (measure-command { $webpage1 = $wc.DownloadData($url) }).totalmilliseconds
-	$string = [System.Text.Encoding]::ASCII.GetString($webpage1)
-	$downSize = ($webpage1.length + $webpage2.length) / 1Mb
-	$downloadSize = [Math]::Round($downSize, 2)
-	$downloadTimeSec = $downloadElaspedTime * 0.001
-	$downSpeed = ($downloadSize / $downloadTimeSec) * 8
-	$downloadSpeed = [Math]::Round($downSpeed, 2)
-	return $downloadSpeed
+Function Get-DownloadSpeed($sURL) { #Takes url to static sized file.  Calculates download speed based on time to download
+	$oClient = New-Object System.Net.WebClient
+	#Use Powershell Measure-Command to time how long it takes in seconds to download
+	$dTime = (Measure-Command { $oWebpage = $oClient.DownloadData($sURL) }).TotalSeconds
+	#Grab the same download as string so we can measure the length, round number to 2 decimal
+	$dSize = [System.Math]::Round((([System.text.Encoding]::ASCII.GetString($oWebpage)).Length / 1Mb), 2)
+	#Size divided by time = speed of download(mult by 8 to get in MBps), rounded to 2 decimal
+	$dSpeed = [System.Math]::Round((($dSize / $dTime) * 8), 2)
+	return $dSpeed
 }
+
 #--------------------------------------------------------------------------
-Function bandwidthTest() { #TODO FIXME!! Need to add in TMN functionality as well.
-		<# 
-		Using this method to make the submission to speedtest. Its the only way i could figure out how to interact with the page since there is no API. 
-		More information for later here: https://support.microsoft.com/en-us/kb/290591 
-		#>
+Function Get-SpeedTestSpeed() { #TODO FIXME!! Need to add in TMN functionality as well.
+	
+	#Open a connection to speedtest to pull initial round of values
 	$oXmlHttp = New-Object -ComObject MSXML2.ServerXMLHTTP
 	$oXmlHttp.Open("GET", "http://www.speedtest.net/speedtest-config.php", $False)
 	$oXmlHttp.Send()
-	
 	#Retrieving the content of the response.
 	[xml]$xContent = $oXmlHttp.responseText
+	#Set global properties for our location and ISP.
+	#Bad form to touch global scoped from here, should probably return a custom PS Object instead #FIXME?!
 	$global:oBandwidth.ISP = $xContent.settings.client.isp
 	$global:oBandwidth.Lat = $xContent.settings.client.lat
 	$global:oBandwidth.Lon = $xContent.settings.client.lon
 	
 	#Making another request. This time to get the server list from the site.
-	$oXmlHttp1 = New-Object -ComObject MSXML2.ServerXMLHTTP
-	$oXmlHttp1.Open("GET", "http://www.speedtest.net/speedtest-servers.php", $False)
-	$oXmlHttp1.Send()
-	
+	$oXmlHttp = New-Object -ComObject MSXML2.ServerXMLHTTP
+	$oXmlHttp.Open("GET", "http://www.speedtest.net/speedtest-servers.php", $False)
+	$oXmlHttp.Send()
 	#Retrieving the content of the response.
-	[xml]$xServerList = $oXmlHttp1.responseText
-	$aServer = $xServerList.settings.servers.server
+	[xml]$xContent = $oXmlHttp.responseText
 	
-	#Below we calculate servers relative closeness to you by doing some math against latitude and longitude. 
+	#Store the available server list in an array we can iterate over properly
+	$aServer = $xContent.settings.servers.server
+	
+	#Below we calculate servers relative closeness to us by doing some math against latitude and longitude. 
 	foreach ($oValue in $aServer)	{
-		$R = 6371;
-		[float]$dlat = ([float]$global:oBandwidth.Lat - [float]$oValue.lat) * 3.14 / 180;
-		[float]$dlon = ([float]$global:oBandwidth.Lon - [float]$oValue.lon) * 3.14 / 180;
-		[float]$a = [math]::Sin([float]$dLat/2) * [math]::Sin([float]$dLat/2) + [math]::Cos([float]$global:oBandwidth.Lat * 3.14 / 180) * [math]::Cos([float]$oValue.lat * 3.14 / 180) * [math]::Sin([float]$dLon/2) * [math]::Sin([float]$dLon/2);
-		[float]$c = 2 * [math]::Atan2([math]::Sqrt([float]$a), [math]::Sqrt(1 - [float]$a));
-		[float]$d = [float]$R * [float]$c;
-		
-		$oServerInformation += @([pscustomobject]@{ Distance = $d; Country = $oValue.country; Sponsor = $oValue.sponsor; Url = $oValue.url })
-		$global:oBandwidth.Server = $oValue.url
+		#Filter list to just US servers, speeds things up a bit
+		if ($oValue.Country -eq "United States")
+		{
+			#Haversine formula for calculating great-circle distance more info here: https://en.wikipedia.org/wiki/Haversine_formula
+			$R = 6371; #Earth radius in km
+			#Difference in Lat between us(global:oBandwidth) and the server we are checking ($oValue) converted to radians
+			[float]$dlat = ([float]$global:oBandwidth.Lat - [float]$oValue.lat) * 3.14 / 180;
+			#Difference in Long between us(global:oBandwidth) and the server we are checking ($oValue) converted to radians
+			[float]$dlon = ([float]$global:oBandwidth.Lon - [float]$oValue.lon) * 3.14 / 180;
+			#Much higher level math than I'll ever understand.  Thank the gods for Google
+			[float]$a = [math]::Sin([float]$dLat/2) * [math]::Sin([float]$dLat/2) + [math]::Cos([float]$global:oBandwidth.Lat * 3.14 / 180) * [math]::Cos([float]$oValue.lat * 3.14 / 180) * [math]::Sin([float]$dLon/2) * [math]::Sin([float]$dLon/2);
+			[float]$c = 2 * [math]::Atan2([math]::Sqrt([float]$a), [math]::Sqrt(1 - [float]$a));
+			#Distance returned in km, cuz the metric system is a much nicer rounder system to work with
+			[float]$d = [float]$R * [float]$c;
+			#Store the values we care about in a custom ps object for easy sorting later
+			$oServerInformation += @([pscustomobject]@{ Distance = $d; Url = $oValue.url })
+		}
+	}
+	#Of the list of servers, sort on the distance property(we just calculated this), we'll chooose the lowest distance(first element[0])
+	$oServerInformation = $oServerInformation | Sort-Object -Property Distance
+	
+	#Foramt the url.  The url we get from speedtest is not to a download, so we need to massage a bit
+	$sDownloadUrl = ($oServerInformation[0].Url -split 'upload')[0] + 'random2000x2000.jpg'
+	#Bad form to touch global scoped from here, should probably return a custom PS Object instead #FIXME?!
+	$global:oBandwidth.Server = $sDownloadUrl
+	
+	#Run speed test 5 times, store in custom ps object for easy sorting
+	For ($i = 0; $i -lt 5; $i++) {
+		$oSpeedResults += @([pscustomobject]@{ Speed = (Get-DownloadSpeed($sDownloadUrl)); })
 	}
 	
-	$oServerInformation = $oServerInformation | Sort-Object -Property distance
-	
-	#Runs the functions 4 times and takes the highest result.
-	$DLResults1 = downloadSpeed($oServerInformation[0].url)
-	$SpeedResults += @([pscustomobject]@{ Speed = $DLResults1; })
-	
-	$DLResults2 = downloadSpeed($oServerInformation[1].url)
-	$SpeedResults += @([pscustomobject]@{ Speed = $DLResults2; })
-	
-	$DLResults3 = downloadSpeed($oServerInformation[2].url)
-	$SpeedResults += @([pscustomobject]@{ Speed = $DLResults3; })
-	
-	$DLResults4 = downloadSpeed($oServerInformation[3].url)
-	$SpeedResults += @([pscustomobject]@{ Speed = $DLResults4; })
-	
-	$UnsortedResults = $SpeedResults | Sort-Object -Property speed
-	$global:oBandwidth.Speed = $UnsortedResults[3].speed
+	#Sort custom object(this time descending) and we choose the highest speed(first element[0])
+	$oSpeedResults = $oSpeedResults | Sort-Object -Descending -Property Speed
+	return $oSpeedResults[0].Speed
 }
-function sendMail()
-{
+
+function Get-TestMyNetSpeed {
+	#TestMy.Net has static URL for downloading, but no way to calculate our current location or ISP
+	$sDownloadUrl = 'http://sf.testmy.net/dl-10mb'
+	
+	#Run speed test 5 times, store in custom ps object for easy sorting
+	For ($i = 0; $i -lt 5; $i++) {
+		$oSpeedResults += @([pscustomobject]@{ Speed = (Get-DownloadSpeed($sDownloadUrl)); })
+	}
+	
+	#Sort custom object(descending) and we choose the highest speed(first element[0])
+	$oSpeedResults = $oSpeedResults | Sort-Object -Descending -Property Speed
+	return $oSpeedResults[0].Speed, $sDownloadUrl
+}
+
+
+function Send-Mail() {
 	$SMTPMessage = New-Object System.Net.Mail.MailMessage($oSMTP.FROM, $oSMTP.TO, $oSMTP.Subject, $oSMTP.Body)
 	$SMTPClient = New-Object Net.Mail.SmtpClient($oSMTP.Server, 25)
 	$SMTPClient.EnableSsl = $true
 	$SMTPClient.Credentials = New-Object System.Net.NetworkCredential("toolbox.stats@wesd.org", "moon-athens-DUSK-succeed");
 	$SMTPClient.Send($SMTPMessage)
 }
+#--------------------------------------------------------------------------
+
 # ----------------------------------------------------
 # END OF GLOBAL DECLARATIONS
 # ----------------------------------------------------
@@ -176,16 +198,17 @@ function Main {
         To get the console output in the Packager (Forms Engine) use:
 		$ConsoleOutput (Type: System.Collections.ArrayList)
 #>
+	
 	#Current Date/Time
 	$oSMTP.Body += $global:sDate + "`n"
 	
 	#record ping data 
 	$oSMTP.Body += $sLine + "Running Ping tests....`n" + $sLine
-	pingToolbox
+	$oSMTP.Body += Get-ToolboxPing
 	
 	#record tracert data 
 	$oSMTP.Body += $sLine + "Running Trace Route tests....`n" + $sLine
-	traceToolbox
+	$oSMTP.Body += Get-ToolboxTraceroute
 	
 	#Test port 443
 	$oSMTP.Body += $sLine + "Testing connectivity on port 443....`n" + $sLine
@@ -196,10 +219,10 @@ function Main {
 	$oSMTP.Body += $sLine + "Testing connectivity on port 80....`n" + $sLine
 	$oSMTP.Body += ((Test-NetConnection -Port 80 -ComputerName $global:sAddress | Out-String))
 	$oSMTP.Body += "`n`n"
-		
+	
 	#Test speed to internet(speedtest.net)
-	bandwidthTest
-	$oSMTP.Body += $sLine + "Testing internet connection speed....`n" + $sLine
+	$oSMTP.Body += $sLine + "(SpeedTest.Net) Testing internet connection speed....`n" + $sLine
+	$sSpeed = Get-SpeedTestSpeed
 	$sISP = $oBandwidth.ISP
 	$oSMTP.Body += "Current ISP = $sISP" +"`n"
 	$sLat = $oBandwidth.Lat
@@ -207,14 +230,16 @@ function Main {
 	$oSMTP.Body += "Current Location(of ISP connection): Lat: $sLat Long: $sLon" + "`n"
 	$sServer = $oBandwidth.Server
 	$oSMTP.Body += "Testing connection to: $sServer" + "`n"
-	$sSpeed = $oBandwidth.Speed
+	$oSMTP.Body += "Connection speed: $sSpeed Mbit/Sec" + "`n"
+	#Test speed to internet(testmy.net)
+	$oSMTP.Body += $sLine + "(TestMy.Net) Testing internet connection speed....`n" + $sLine
+	$sSpeed, $sServer = Get-TestMyNetSpeed
+	$oSMTP.Body += "Testing connection to: $sServer" + "`n"
 	$oSMTP.Body += "Connection speed: $sSpeed Mbit/Sec" + "`n"
 	
+#	Write-Output $oSMTP.Body #Debug
 	#Compose and send Email
-	sendMail
-	
-	#Clean up log file #TODO FIXME
-	#Nothing here yet.. :(
+	Send-Mail
 	
 	#Finished
 	$script:ExitCode = 0 #Set the exit code for the Packager
