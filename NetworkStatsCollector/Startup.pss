@@ -6,10 +6,11 @@
 	 Created on:   	4/26/2018 9:52 AM
 	 Created by:   	Christopher.LaDue
 	 Organization: 	Cascade Technology Alliance
-	 Filename:     	
+	 Filename:     	NetworkStatsCollector.exe
 	===========================================================================
 	.DESCRIPTION
-		
+	Swiss Army Knife toolbox for testing netowrk connectivity from clients to our DW-Toolbox
+	Will add more tools and metrics as we discover new ways of measuring the connection
 #>
 #--------------------------------------------
 # Declare Global Variables and Functions here
@@ -87,7 +88,8 @@ function Get-ToolboxTraceroute() {
 }
 
 #--------------------------------------------------------------------------
-Function Get-DownloadSpeed($sURL) { #Takes url to static sized file.  Calculates download speed based on time to download
+Function Get-DownloadSpeed($sURL){	#Takes url to static sized file.  Calculates download speed based on time to download
+	#For some reason, this consistently reports a little low.  Should probably troubleshoot this at some point in the future
 	$oClient = New-Object System.Net.WebClient
 	#Use Powershell Measure-Command to time how long it takes in seconds to download
 	$dTime = (Measure-Command { $oWebpage = $oClient.DownloadData($sURL) }).TotalSeconds
@@ -126,9 +128,8 @@ Function Get-SpeedTestSpeed() { #TODO FIXME!! Need to add in TMN functionality a
 	#Below we calculate servers relative closeness to us by doing some math against latitude and longitude. 
 	foreach ($oValue in $aServer)	{
 		#Filter list to just US servers, speeds things up a bit
-		if ($oValue.Country -eq "United States")
-		{
-			#Haversine formula for calculating great-circle distance more info here: https://en.wikipedia.org/wiki/Haversine_formula
+		if ($oValue.Country -eq "United States") {
+			#Haversine formula for calculating great-circle distance. More info here: https://en.wikipedia.org/wiki/Haversine_formula
 			$R = 6371; #Earth radius in km
 			#Difference in Lat between us(global:oBandwidth) and the server we are checking ($oValue) converted to radians
 			[float]$dlat = ([float]$global:oBandwidth.Lat - [float]$oValue.lat) * 3.14 / 180;
@@ -172,6 +173,7 @@ function Get-TestMyNetSpeed {
 	
 	#Sort custom object(descending) and we choose the highest speed(first element[0])
 	$oSpeedResults = $oSpeedResults | Sort-Object -Descending -Property Speed
+	#Returning the speed and the download URL
 	return $oSpeedResults[0].Speed, $sDownloadUrl
 }
 
@@ -192,9 +194,17 @@ function Send-Mail() {
 function Main {
 <#
     .SYNOPSIS
-        The Main function starts the project application.
+        Swiss army knife toolbox for checking network connectivity
     
     .NOTES
+		This program runs the following network related checks:
+			Can client ping DW-Toolbox?
+			What is the trace route from client to DW-Toolbox
+			Can client connect to DW-Toolbox port 80?
+			Can client connect to DW-Toolbox port 443?
+			What is the clients current internet speed? (Tests against speedtest.net AND testmy.net servers)
+		After collecting this data, it emails to the toolbox.stats@wesd.org email account
+	
         To get the console output in the Packager (Forms Engine) use:
 		$ConsoleOutput (Type: System.Collections.ArrayList)
 #>
